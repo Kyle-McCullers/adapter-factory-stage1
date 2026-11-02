@@ -1,0 +1,3 @@
+# Event transcripts
+
+The nine complete event transcripts (one JSONL per run, 1.8 MB in all) are not in this snapshot. While inspecting the raw exports, the agents printed rows that contain owner names, phone numbers, and email addresses, and a reliable redaction of free-text transcripts was not possible before submission. Each run's `result.json` (model, turns, tokens, cost, duration) and `NOTES.md` (the agent's own account of its decisions and ambiguities) are included. The transcripts are available to reviewers and researchers on request after redaction, and will be added to the repository once redacted.

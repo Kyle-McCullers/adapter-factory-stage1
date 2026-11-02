@@ -1,0 +1,17 @@
+# Trap catalog
+
+Silent failures observed while agents built this panel: cases in which the agent completed the task, passed its tests, reported success, and was wrong. Each entry records the symptom, why it was silent, the protocol step that caught it, and where the guard lives in the repository. The protocol itself is in `docs/verification-protocol.md` and summarized in the technical appendix, section 4.
+
+| # | Trap | Symptom | Why silent | Caught by | Guard in repo |
+|---|---|---|---|---|---|
+| 1 | Filters that do not survive export | A download of "Black-owned firms" contains firms of every ethnicity (8 of 14 tenants of one platform, June 2026) | File is well-formed and the row count is plausible | Export-versus-interface audit; identity-label audit | Tenants without a per-row ethnicity field are not loaded; see `docs/data-sources/dbe-b2gnow-sources.md` |
+| 2 | Documentation that diverges from data | Documentation promises an ownership tag; data carry a leadership tag or none | A string match on the documented name returns an empty set or the wrong set | Documentation-versus-data check | Distinct values recorded verbatim in each adapter docstring |
+| 3 | Attribute homonyms | "LGBTQ+ friendly" matched as "LGBTQ+ owned" (about 200,000 wrong records in a reference reproduction) | Both are valid strings in the same field | Identity-label audit (exact-string acceptance) | Accepted values declared per adapter; tests assert excluded labels do not pass |
+| 4 | Sources that appear ingestible and are not | Export truncates outside a session; list page lacks the identity field present only on detail pages | A partial file parses | Totals reconciliation | Published totals recorded in docstrings; discrepancies documented before registration |
+| 5 | Refreshes that corrupt the panel | A second run doubles a source's rows; a source silently rewrites its export so the filter returns zero rows (Texas, October 2026) | Every row is individually valid; an empty result is a valid result | Idempotency check; retention rule's shrink flag | `carry_forward_records` in `scripts/pipeline/run.py`; tests for idempotent writes and empty-source flagging |
+| 6 | Stale rows behind a status field | Directory describes itself as certified firms; two thirds of ingested rows were expired certifications in a column the adapter never read (Connecticut) | Rows are real firms with real, expired certifications | Independent reconstructions (pilot, October 16, 2026); not the adapter's passing tests | `certification_status`, `first_certified`, `certification_expires` columns; one record per firm, October 25, 2026 |
+| 7 | Clean-environment failures | Scheduled runs on 2026-07-01 and 2026-10-01 failed on a missing manual file and a removed credential; the public panel served the Q2 release for six months | Visible in logs, invisible to users of a current-looking site | Clean-environment run (added to the protocol afterward) | Guard for absent manual files; credential reference removed; manual run 2026-10-16 restored the panel |
+
+Note on reference data. A 99.7 percent reproduction of an academic extract of 14,532 records (14,494 recovered) is true and does not show the panel is accurate; the extract is self-declared and crowdsourced, not a peer measure. The 38 mismatches were the informative result (they surfaced trap 2).
+
+Traps 6 and 7 each added a step to the protocol. Trap 6 was found by agents rebuilding the adapter from the raw file with no access to the incumbent, which is the design of the independent-reconstruction study.

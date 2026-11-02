@@ -1,0 +1,17 @@
+data/businesses_full.csv
+data/geocoding.log
+scripts/venv/
+scripts/__pycache__/
+*.pyc
+.DS_Store
+.superpowers/
+.worktrees/
+data/manual_downloads/
+data/mbe_frame.duckdb
+*.duckdb.bak-*
+data/bbrt.duckdb
+data/public/
+
+# Program-listing level files are published with the Release, not committed (large, change every quarter).
+data/listings.csv
+data/listings.parquet

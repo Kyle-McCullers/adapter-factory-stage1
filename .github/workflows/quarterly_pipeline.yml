@@ -1,0 +1,113 @@
+name: Quarterly Pipeline
+
+on:
+  schedule:
+    # 6am UTC on the first of January, April, July, October
+    - cron: '0 6 1 1,4,7,10 *'
+  workflow_dispatch:
+    inputs:
+      snapshot_id:
+        description: 'Override snapshot ID (e.g. 2026-Q2). Leave blank to use current quarter.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Fetch latest research panel DB
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE_TOKEN: ${{ secrets.PRIVATE_ARCHIVE_TOKEN }}
+          ARCHIVE_REPO: ${{ vars.PRIVATE_ARCHIVE_REPO || '<PRIVATE_ARCHIVE_REPO>' }}
+        run: |
+          # Prefer the PRIVATE full working DB (it still has contact fields for firms
+          # carried forward from earlier quarters). Fall back to the public Release copy
+          # (contacts withheld) when no private archive exists yet. Pull the latest so the
+          # pipeline appends this quarter's snapshot and carries records forward.
+          # First-ever run starts fresh.
+          TAG=""
+          if [ -n "$ARCHIVE_TOKEN" ]; then
+            TAG=$(GH_TOKEN="$ARCHIVE_TOKEN" gh release list --repo "$ARCHIVE_REPO" --limit 50 --json tagName --jq '[.[].tagName | select(startswith("full-"))] | sort | last // ""' || true)
+          fi
+          if [ -n "$TAG" ] && GH_TOKEN="$ARCHIVE_TOKEN" gh release download "$TAG" --repo "$ARCHIVE_REPO" --pattern bbrt.duckdb --dir data --clobber; then
+            echo "Base DB: private archive $TAG"
+          else
+            gh release download --pattern bbrt.duckdb --dir data --clobber || echo "No prior release DB; starting fresh."
+            echo "::warning title=Base DB is the public copy::No private archive release found; carried-forward firms have no contact fields in this run."
+          fi
+
+      - name: Run pipeline
+        working-directory: scripts
+        env:
+          # SAM_GOV_API_KEY intentionally NOT passed: the entity-extract API 404s
+          # with a personal data.gov key (needs a SAM.gov system account — see
+          # DECISIONS.md 2026-06-10). Without the key, sam_8a skips at discovery
+          # instead of failing the whole run at fetch. Re-add the secret here
+          # once a SAM.gov system account exists.
+          SNAPSHOT_ID: ${{ github.event.inputs.snapshot_id }}
+        run: |
+          if [ -n "$SNAPSHOT_ID" ]; then
+            python -m pipeline.run --snapshot-id "$SNAPSHOT_ID"
+          else
+            python -m pipeline.run
+          fi
+
+      - name: Archive the full working DB privately
+        env:
+          ARCHIVE_TOKEN: ${{ secrets.PRIVATE_ARCHIVE_TOKEN }}
+          ARCHIVE_REPO: ${{ vars.PRIVATE_ARCHIVE_REPO || '<PRIVATE_ARCHIVE_REPO>' }}
+        run: |
+          # The working DB holds owner/phone/email and raw source rows for every firm.
+          # It must never be public, but it must not be lost either: the public Release
+          # copy cannot regenerate contacts for firms a source has stopped listing
+          # (retention policy), so this private copy is the only complete record.
+          if [ -z "$ARCHIVE_TOKEN" ]; then
+            echo "::warning title=Private archive skipped::PRIVATE_ARCHIVE_TOKEN is not set. The full working DB was NOT saved; contact fields for this quarter will be lost when this runner exits."
+            exit 0
+          fi
+          TAG="full-$(date +%Y-%m-%d-%H%M)"
+          GH_TOKEN="$ARCHIVE_TOKEN" gh release create "$TAG" data/bbrt.duckdb \
+            --repo "$ARCHIVE_REPO" --title "Full working DB — $TAG" \
+            --notes "PRIVATE. Contains contact fields and raw source rows. Do not make public." \
+          || echo "::error title=Private archive FAILED::Could not save the full working DB to $ARCHIVE_REPO."
+
+      - name: Publish research panel DB to a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Distribute the (large, growing) DuckDB via Releases instead of git.
+          # A new dated release each run keeps citable per-snapshot download points;
+          # the site links to /releases/latest/download/bbrt.duckdb (auto-resolves to newest).
+          #
+          # What is uploaded is a PUBLIC COPY with contact fields and raw source rows
+          # removed (scripts/pipeline/public_db.py). The working DB never leaves the runner.
+          # The asset keeps the name bbrt.duckdb so next quarter's download step still finds it.
+          (cd scripts && python -m pipeline.public_db ../data/bbrt.duckdb ../data/public/bbrt.duckdb)
+          TAG="data-$(date +%Y-%m-%d)"
+          gh release create "$TAG" data/public/bbrt.duckdb data/listings.parquet \
+            --title "BBRT research panel — $TAG" \
+            --notes "Automated quarterly snapshot. Contact fields are withheld; see the codebook." --latest \
+          || gh release upload "$TAG" data/public/bbrt.duckdb data/listings.parquet --clobber
+
+      - name: Commit and push updated CSV + summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/businesses.csv data/businesses.parquet data/sources.csv data/meta.json data/snapshots/
+          git diff --staged --quiet || git commit -m "chore: quarterly pipeline update"
+          git push
